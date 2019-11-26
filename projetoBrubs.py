@@ -85,29 +85,43 @@ def secgroupMongoCreate(name):
     except ClientError as e:
         print(e)
 
-def secgroupEmpty(name):
-    data = ohioClient.describe_vpcs()
-    vpcID = data.get('Vpcs', [{}])[0].get('VpcId', '')
-    try:
-        data = ohioClient.create_security_group(GroupName=name, Description="Sec Group Brubs Mongo", VpcId = vpcID)
-        secGroupID = data['GroupId']
-        print('Security Group Generated')
-        response = ohioClient.authorize_security_group_ingress(
-            GroupId=secGroupID,
-            IpPermissions=[]
-        )
-        print('Empty Ingress')
-        return secGroupID
-
-    except ClientError as e:
-        print(e)
-
 def secgroupDelete(name, client):
     try:
         response = client.delete_security_group(GroupName=name)
         print('Security Group Deleted')
     except ClientError as e:
         print(e)
+
+def secgroupIngress(secGroupID, client, ip, port):
+    print("Mudando Ingresse dos SecGroups")
+    response = client.authorize_security_group_ingress(
+        GroupId=secGroupID,
+        IpPermissions=[
+            {
+                'IpProtocol' : 'tcp',
+                'FromPort' : 22,
+                'ToPort' : 22,
+                'IpRanges' : [{'CidrIp' : '0.0.0.0/0'}]
+            },
+            {
+                'IpProtocol' : 'tcp',
+                'FromPort' : port,
+                'ToPort' : port,
+                'IpRanges' : [{'CidrIp' : '{}/32'.format(ip)}]
+            }
+        ]
+    )
+    response = client.revoke_security_group_ingress(
+        GroupId=secGroupID,
+        IpPermissions=[
+            {
+                'IpProtocol' : 'tcp',
+                'FromPort' : port,
+                'ToPort' : port,
+                'IpRanges' : [{'CidrIp' : '0.0.0.0/0'}]
+            }
+        ]
+    )
 
 def instanceMongo():
     instancesMongo = ohioEc2.create_instances(
@@ -140,9 +154,9 @@ def instanceMongo():
     for i in instancesMongo:
         ids.append(i.id)
     waiter = ohioClient.get_waiter('instance_status_ok')
-    waiter.wait(InstanceIds = [ids[1]])
+    waiter.wait(InstanceIds = [ids[0]])
     
-    mongoResponse = ohioClient.describe_instances(InstanceIds=[ids[1]])
+    mongoResponse = ohioClient.describe_instances(InstanceIds=[ids[0]])
     print("Instances Running")
     return mongoResponse['Reservations'][0]['Instances'][0]['NetworkInterfaces'][0]['PrivateIpAddresses'][0]['PrivateIpAddress']
 
@@ -151,7 +165,7 @@ def instanceMongoWeb(mongoIP):
         ImageId='ami-0d5d9d301c853a04a',
         MinCount=1,
         MaxCount=1,
-        SecurityGroups=['AutoSec-Empty'],
+        SecurityGroups=['AutoSec-MongoWeb'],
         KeyName='AutoKey-Mongo',
         InstanceType='t2.micro',
         TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Owner', 'Value': 'Brubs'}, {'Key': 'Name', 'Value': 'AutoBrubs-MongoWeb'}]}],
@@ -176,8 +190,8 @@ def instanceMongoWeb(mongoIP):
     for i in instancesMongo:
         ids.append(i.id)
     waiter = ohioClient.get_waiter('instance_status_ok')
-    waiter.wait(InstanceIds = [ids[1]])
-    mongoResponse = ohioClient.describe_instances(InstanceIds=[ids[1]])
+    waiter.wait(InstanceIds = [ids[0]])
+    mongoResponse = ohioClient.describe_instances(InstanceIds=[ids[0]])
     print("Instances Running")
     return mongoResponse['Reservations'][0]['Instances'][0]['PublicIpAddress']
 
@@ -318,7 +332,7 @@ def imageCreate(instanceID, name):
     print("Image Generated")
     return imageID
 
-def launchConfigCreate(imageID, name):
+def launchConfigCreate(imageID, name, ip):
     data = virginiaAutoScale.create_launch_configuration(
         LaunchConfigurationName=name,
         ImageId=imageID,
@@ -329,8 +343,10 @@ def launchConfigCreate(imageID, name):
         UserData = '''#!/bin/bash
                     cd home/ubuntu/
                     cd REST-FastAPI
-                    uvicorn main:app --reload --host "0.0.0.0" --port 5000
-        ''')
+                    export redirectIP={}
+                    uvicorn redirectIP:app --reload --host "0.0.0.0" --port 5000
+        '''.format(ip)
+    )
     print("Launch Configuration Generated")
 
 def launchConfigDelete(name):
@@ -407,28 +423,40 @@ def autoScalingDelete(name):
 autoScalingDelete("AutoScaleBrubs")
 instancesDelete(virginiaEc2, virginiaClient)
 instancesDelete(ohioEc2, ohioClient)
+
 loadBalancerDelete("AutoLoad-Brubs")
 time.sleep(25)
 launchConfigDelete('AutoLaunch')
 imageDelete('AutoImage')
 targetGroupDelete('AutoTarget-Brubs')
+
 keypairDelete("AutoKey", virginiaClient)
 keypairDelete("AutoKey-Mongo", ohioClient)
+
 secgroupDelete("AutoSec", virginiaClient)
 secgroupDelete('AutoSec-Mongo', ohioClient)
+secgroupDelete('AutoSec-MongoWeb', ohioClient)
+secgroupDelete('AutoSec-Empty1', ohioClient)
+secgroupDelete('AutoSec-Empty2', ohioClient)
+
 keypairCreate("AutoKey", virginiaClient)
 keypairCreate("AutoKey-Mongo", ohioClient)
+
 secGroupIDWeb = secgroupRedirectCreate("AutoSec", virginiaClient)
 secGroupIDMongoWeb = secgroupRedirectCreate("AutoSec-MongoWeb", ohioClient)
-secGroupIDEmpty = secgroupEmpty("AutoSec-Empty")
 secGroupIDMongo = secgroupMongoCreate("AutoSec-Mongo")
+
 lbARN = loadBalancerCreate("AutoLoad-Brubs", secGroupIDWeb)
+
 ipMongo = instanceMongo()
 ipMongoWeb = instanceMongoWeb(ipMongo)
+# secgroupIngress(secGroupIDMongo, ohioClient, ipMongoWeb, 27017)
 ipRedirectWeb = instanceRedirectWeb(ipMongoWeb)
+# secgroupIngress(secGroupIDMongoWeb, ohioClient, ipRedirectWeb, 5000)
 data = instanceWebFinal(ipRedirectWeb)
+
 imageID = imageCreate(data[1], 'AutoImage')
-launchConfigCreate(imageID, "AutoLaunch")
+launchConfigCreate(imageID, "AutoLaunch", ipRedirectWeb)
 tgARN = targetGroupCreate("AutoTarget-Brubs")
 listenerCreate(tgARN, lbARN)
 autoScalingCreate("AutoScaleBrubs", tgARN)
