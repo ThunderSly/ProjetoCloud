@@ -39,14 +39,18 @@ def secgroupRedirectCreate(name, client):
         response = client.authorize_security_group_ingress(
             GroupId=secGroupID,
             IpPermissions=[
-                {'IpProtocol': 'tcp',
+                {
+                    'IpProtocol': 'tcp',
                     'FromPort': 22,
                     'ToPort': 22,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]},
-                {'IpProtocol': 'tcp',
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                },
+                {
+                    'IpProtocol': 'tcp',
                     'FromPort': 5000,
                     'ToPort': 5000,
-                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]}
+                    'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                }
             ]
         )
         print('Ingress Set')
@@ -97,12 +101,6 @@ def secgroupIngress(secGroupID, client, ip, port):
     response = client.authorize_security_group_ingress(
         GroupId=secGroupID,
         IpPermissions=[
-            {
-                'IpProtocol' : 'tcp',
-                'FromPort' : 22,
-                'ToPort' : 22,
-                'IpRanges' : [{'CidrIp' : '0.0.0.0/0'}]
-            },
             {
                 'IpProtocol' : 'tcp',
                 'FromPort' : port,
@@ -193,7 +191,7 @@ def instanceMongoWeb(mongoIP):
     waiter.wait(InstanceIds = [ids[0]])
     mongoResponse = ohioClient.describe_instances(InstanceIds=[ids[0]])
     print("Instances Running")
-    return mongoResponse['Reservations'][0]['Instances'][0]['PublicIpAddress']
+    return [mongoResponse['Reservations'][0]['Instances'][0]['PublicIpAddress'], mongoResponse['Reservations'][0]['Instances'][0]['NetworkInterfaces'][0]['PrivateIpAddresses'][0]['PrivateIpAddress']]
 
 def instanceRedirectWeb(mongoWebIP):
     instancesWeb = virginiaEc2.create_instances(
@@ -436,8 +434,6 @@ keypairDelete("AutoKey-Mongo", ohioClient)
 secgroupDelete("AutoSec", virginiaClient)
 secgroupDelete('AutoSec-Mongo', ohioClient)
 secgroupDelete('AutoSec-MongoWeb', ohioClient)
-secgroupDelete('AutoSec-Empty1', ohioClient)
-secgroupDelete('AutoSec-Empty2', ohioClient)
 
 keypairCreate("AutoKey", virginiaClient)
 keypairCreate("AutoKey-Mongo", ohioClient)
@@ -449,10 +445,10 @@ secGroupIDMongo = secgroupMongoCreate("AutoSec-Mongo")
 lbARN = loadBalancerCreate("AutoLoad-Brubs", secGroupIDWeb)
 
 ipMongo = instanceMongo()
-ipMongoWeb = instanceMongoWeb(ipMongo)
-# secgroupIngress(secGroupIDMongo, ohioClient, ipMongoWeb, 27017)
-ipRedirectWeb = instanceRedirectWeb(ipMongoWeb)
-# secgroupIngress(secGroupIDMongoWeb, ohioClient, ipRedirectWeb, 5000)
+data1 = instanceMongoWeb(ipMongo)
+secgroupIngress(secGroupIDMongo, ohioClient, data1[1], 27017)
+ipRedirectWeb = instanceRedirectWeb(data1[0])
+secgroupIngress(secGroupIDMongoWeb, ohioClient, ipRedirectWeb, 5000)
 data = instanceWebFinal(ipRedirectWeb)
 
 imageID = imageCreate(data[1], 'AutoImage')
