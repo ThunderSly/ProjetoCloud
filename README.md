@@ -1,4 +1,4 @@
-# ProjetoCloud
+# Cloud Hybrid Server
 ### Servidor de Cloud Hibrido
 
 Instalar boto3 e awscli via pip:
